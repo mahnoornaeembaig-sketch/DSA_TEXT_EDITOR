@@ -1,6 +1,9 @@
 
 #include <windows.h>
 
+#define UNICODE
+#define _UNICODE
+
 LRESULT CALLBACK WindowProcedure(
     HWND hwnd,
     UINT msg,
@@ -22,21 +25,21 @@ int WINAPI WinMain(
     LPSTR args,
     int nCmdShow
 ) {
-    const char CLASS_NAME[] = "TextEditorWindow";
+    const wchar_t CLASS_NAME[] = L"TextEditorWindow";
 
-    WNDCLASS wc = {};
+    WNDCLASSW wc = {};
     wc.lpfnWndProc = WindowProcedure;
     wc.hInstance = hInst;
     wc.lpszClassName = CLASS_NAME;
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
 
-    RegisterClass(&wc);
+    RegisterClassW(&wc);
 
-    HWND hwnd = CreateWindowEx(
+    HWND hwnd = CreateWindowExW(
         0,
         CLASS_NAME,
-        "DSA Text Editor",
+        L"DSA Text Editor",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
