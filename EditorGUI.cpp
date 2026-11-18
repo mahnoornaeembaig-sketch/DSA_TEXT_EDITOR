@@ -72,7 +72,39 @@ char replaceBuffer[256] = "";
 char currentFilename[MAX_PATH] = "";
 
 bool showStatusBar = true;
-bool documentSaved = false;
+bool documentSaved = true;   // an untouched empty document has nothing to save
+
+// Groups several backend edits into ONE undo/redo step for as long as
+// the object lives (cut, paste, typing over a selection, ...).
+// Nested groups are allowed; the outermost one decides.
+struct EditGroup
+{
+    bool active = false;
+
+    explicit EditGroup(bool startNow = true)
+    {
+        if (startNow)
+            begin();
+    }
+
+    void begin()
+    {
+        if (!active && controller)
+        {
+            controller->beginGroup();
+            active = true;
+        }
+    }
+
+    ~EditGroup()
+    {
+        if (active && controller)
+            controller->endGroup();
+    }
+
+    EditGroup(const EditGroup&) = delete;
+    EditGroup& operator=(const EditGroup&) = delete;
+};
 
 // =====================================================
 // FUNCTION DECLARATIONS
@@ -314,7 +346,17 @@ bool GetCaretPosition(int& line, int& column)
 
 void RefreshDocumentAt(int line, int column)
 {
-    RefreshDocument();
+        RefreshDocument();
+
+    int lineCount = static_cast<int>(
+        SendMessageA(hDocument, EM_GETLINECOUNT, 0, 0)
+    );
+
+    if (line >= lineCount)
+        line = lineCount - 1;
+
+    if (line < 0)
+        line = 0;
 
     int lineStart = static_cast<int>(
         SendMessageA(
@@ -327,7 +369,18 @@ void RefreshDocumentAt(int line, int column)
 
     if (lineStart >= 0)
     {
+        int lineLength = static_cast<int>(
+            SendMessageA(hDocument, EM_LINELENGTH, lineStart, 0)
+        );
+
+        if (column > lineLength)
+            column = lineLength;
+
+        if (column < 0)
+            column = 0;
+
         int position = lineStart + column;
+
 
         SendMessageA(
             hDocument,
@@ -827,8 +880,11 @@ bool DeleteSelectedText(int& line, int& column)
         (WPARAM)&start, (LPARAM)&end
     );
 
-    if (start == end)
+        if (start == end)
         return false;
+
+    // One selection delete = one undo step, however many lines it spans.
+    EditGroup group;
 
     line = static_cast<int>(
         SendMessageA(hDocument, EM_LINEFROMCHAR, start, 0)
@@ -998,10 +1054,15 @@ void PasteClipboardText()
 
     GlobalUnlock(hData);
 
-    CloseClipboard();
+        CloseClipboard();
 
     if (text.empty())
         return;
+
+    // Deleting the selection and inserting the clipboard text
+    // must undo together.
+    EditGroup group;
+
 
     DWORD selectionStart = 0;
     DWORD selectionEnd = 0;
@@ -1412,13 +1473,14 @@ LRESULT CALLBACK DocumentEditProcedure(
     {
         switch (wp)
         {
-            case 'Z':
+                        case 'Z':
                 SendMessageA(
                     GetParent(hwnd),
                     WM_COMMAND,
-                    ID_UNDO,
+                    (GetKeyState(VK_SHIFT) & 0x8000) ? ID_REDO : ID_UNDO,
                     0
                 );
+
                 return 0;
 
             case 'Y':
@@ -1543,9 +1605,9 @@ LRESULT CALLBACK DocumentEditProcedure(
         return 0;
     }
 
-    if (msg == WM_UNDO)
+        if (msg == WM_UNDO)
     {
-        MessageBeep(MB_ICONWARNING);
+        SendMessageA(GetParent(hwnd), WM_COMMAND, ID_UNDO, 0);
         return 0;
     }
 
@@ -1675,10 +1737,16 @@ LRESULT CALLBACK DocumentEditProcedure(
             (LPARAM)&selectionEnd
         );
 
+                // Replacing a selection (delete + the new character) is a
+        // single undo step; plain typing is not grouped.
+        EditGroup typingGroup(false);
+
         // Typing, Enter, Tab or Backspace over a selection first
         // removes that selection through the backend.
-        if (selectionStart != selectionEnd)
+                if (selectionStart != selectionEnd)
         {
+            typingGroup.begin();
+
             documentSaved = false;
 
             if (!DeleteSelectedText(line, column))
@@ -1794,7 +1862,7 @@ LRESULT CALLBACK DocumentEditProcedure(
                 static_cast<char>(wp)
             );
 
-            if (controller->insertText(
+                        if (controller->typeText(
                 line + 1,
                 column + 1,
                 character))
@@ -2040,7 +2108,7 @@ LRESULT CALLBACK WindowProcedure(
 
                 // EDIT
 
-                case ID_UNDO:
+                                case ID_UNDO:
                 {
                     if (!controller->undo())
                     {
@@ -2050,14 +2118,17 @@ LRESULT CALLBACK WindowProcedure(
 
                     documentSaved = false;
 
-                    RefreshDocument();
-
-                    SetFocus(hDocument);
+                    // Show the change: caret + scroll go to where the
+                    // undo happened instead of jumping to the top.
+                    RefreshDocumentAt(
+                        controller->lastEditLine(),
+                        controller->lastEditColumn()
+                    );
 
                     break;
                 }
 
-                case ID_REDO:
+                                case ID_REDO:
                 {
                     if (!controller->redo())
                     {
@@ -2067,9 +2138,12 @@ LRESULT CALLBACK WindowProcedure(
 
                     documentSaved = false;
 
-                    RefreshDocument();
-
-                    SetFocus(hDocument);
+                    // Show the change: caret + scroll go to where the
+                    // redo happened instead of jumping to the top.
+                    RefreshDocumentAt(
+                        controller->lastEditLine(),
+                        controller->lastEditColumn()
+                    );
 
                     break;
                 }

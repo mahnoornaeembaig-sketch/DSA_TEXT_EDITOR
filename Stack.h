@@ -88,6 +88,16 @@ public:
         top = 0;
     }
 
+    // Reads the oldest (bottom) element without removing it.
+    bool peekBottom(T& value) const {
+        if (isEmpty()) {
+            return false;
+        }
+
+        value = arr[0];
+        return true;
+    }
+
     // Removes the oldest (bottom) element. O(k).
     bool removeBottom() {
         if (isEmpty()) {

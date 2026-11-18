@@ -24,8 +24,14 @@ private:
     std::string currentFilename;
     bool modified;
 
-    // Used to group Replace All operations
+    // Used to group operations that must undo/redo as ONE step
+    // (Replace All, cut, paste, typing over a selection ...)
     std::size_t nextGroupId;
+    std::size_t activeGroup = 0;   // id used by beginGroup()..endGroup()
+    int groupDepth = 0;            // beginGroup() calls may be nested
+
+    // Records an operation; joins the active group, if there is one.
+    void recordOp(EditOperation op);
 
     // Checks whether unsaved changes should be saved or discarded
     bool confirmSaveIfModified();
@@ -51,6 +57,19 @@ public:
     bool remove(int line, int col, int length);
 
     bool insertBlockAtEnd(const std::string& text, bool hasInput);
+
+    // Everything recorded between beginGroup() and the matching
+    // endGroup() is undone / redone together. Calls may be nested.
+    void beginGroup();
+    void endGroup();
+
+    // Insert typed text. Consecutive typing in one word becomes a
+    // single undo step instead of one step per character.
+    bool typeText(int line, int col, const std::string &text);
+
+    // Where the last undo/redo changed the document (0-based).
+    int getLastEditLine() const;
+    int getLastEditColumn() const;
     // Search and replace
     bool search(const std::string &searchText,
                 DynamicArray<Match> &results);
