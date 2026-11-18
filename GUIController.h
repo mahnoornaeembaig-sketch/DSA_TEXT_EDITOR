@@ -1,4 +1,3 @@
-
 #ifndef GUI_CONTROLLER_H
 #define GUI_CONTROLLER_H
 
@@ -32,6 +31,17 @@ public:
 
     bool splitLine(int line, int column);
     bool joinLine(int line);
+
+    // Typing that merges into the previous undo step (see Editor).
+    bool typeText(int line, int column, const std::string& text);
+
+    // Group several edits into ONE undo/redo step. May be nested.
+    void beginGroup();
+    void endGroup();
+
+    // Where the last undo/redo changed the document (0-based).
+    int lastEditLine() const;
+    int lastEditColumn() const;
 
     // Undo / Redo
     bool undo();

@@ -10,6 +10,77 @@ Editor::Editor()
 {
 }
 
+// Record an operation, joining the active group (if any).
+// The group id is allocated lazily, so a group that ends up holding a
+// single operation costs nothing extra.
+void Editor::recordOp(EditOperation op)
+{
+    if (op.groupId == 0 && groupDepth > 0)
+    {
+        if (activeGroup == 0)
+        {
+            activeGroup = nextGroupId++;
+
+            if (nextGroupId == 0)
+                nextGroupId = 1;
+        }
+
+        op.groupId = activeGroup;
+    }
+
+    undoManager.record(op);
+}
+
+void Editor::beginGroup()
+{
+    if (groupDepth++ == 0)
+        activeGroup = 0;
+}
+
+void Editor::endGroup()
+{
+    if (groupDepth > 0 && --groupDepth == 0)
+        activeGroup = 0;
+}
+
+// Typing: extends the previous typing run when possible.
+bool Editor::typeText(int line, int col, const std::string& text)
+{
+    if (text.empty())
+        return false;
+
+    if (!document.insertText(line, col, text))
+        return false;
+
+    modified = true;
+
+    if (groupDepth == 0 &&
+        undoManager.mergeTyping(static_cast<std::size_t>(line),
+                                static_cast<std::size_t>(col), text))
+    {
+        return true;
+    }
+
+    EditOperation op;
+    op.type = OperationType::INSERT_TEXT;
+    op.line = static_cast<std::size_t>(line);
+    op.col = static_cast<std::size_t>(col);
+    op.newText = text;
+
+    recordOp(op);
+    return true;
+}
+
+int Editor::getLastEditLine() const
+{
+    return static_cast<int>(undoManager.getLastLine());
+}
+
+int Editor::getLastEditColumn() const
+{
+    return static_cast<int>(undoManager.getLastCol());
+}
+
 // Get document for Menu
 Document& Editor::getDocument()
 {
@@ -138,7 +209,7 @@ bool Editor::insert(int line, int col, const std::string& text)
     op.col = static_cast<std::size_t>(col);
     op.newText = text;
 
-    undoManager.record(op);
+    recordOp(op);
 
     // Step 3: Mark document as modified
     modified = true;
@@ -204,6 +275,8 @@ bool Editor::insertBlockAtEnd(const std::string& text, bool hasInput)
 
             op.type = OperationType::INSERT_LINE;
             op.line = static_cast<std::size_t>(newLineIndex);
+            // Needed so Redo can put the text back.
+            op.newText = lineText;
 
             undoManager.record(op);
             inserted = true;
@@ -255,7 +328,7 @@ bool Editor::remove(int line, int col, int length)
     op.col = static_cast<std::size_t>(col);
     op.oldText = deletedText;
 
-    undoManager.record(op);
+    recordOp(op);
 
     // Step 3: Mark document as modified
     modified = true;
@@ -307,7 +380,7 @@ bool Editor::replace(
     op.oldText = record.oldText;
     op.newText = record.newText;
 
-    undoManager.record(op);
+    recordOp(op);
 
     // Step 3: Mark document as modified
     modified = true;
@@ -454,7 +527,7 @@ bool Editor::splitLine(int line, int col)
     op.line = static_cast<std::size_t>(line);
     op.col = static_cast<std::size_t>(col);
 
-    undoManager.record(op);
+    recordOp(op);
 
     // Step 3: Mark document as modified
     modified = true;
@@ -493,7 +566,7 @@ bool Editor::joinLine(int line)
     op.line = static_cast<std::size_t>(line);
     op.col = joinPosition;
 
-    undoManager.record(op);
+    recordOp(op);
     modified = true;
 
     return true;

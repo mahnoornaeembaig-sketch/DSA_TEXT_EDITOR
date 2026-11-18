@@ -1,4 +1,3 @@
-
 #include "GUIController.h"
 
 GUIController::GUIController()
@@ -150,4 +149,33 @@ bool GUIController::joinLine(int line)
         return false;
 
     return editor->joinLine(line - 1);
+}
+
+bool GUIController::typeText(
+    int line, int column, const std::string& text)
+{
+    if (line < 1 || column < 1)
+        return false;
+
+    return editor->typeText(line - 1, column - 1, text);
+}
+
+void GUIController::beginGroup()
+{
+    editor->beginGroup();
+}
+
+void GUIController::endGroup()
+{
+    editor->endGroup();
+}
+
+int GUIController::lastEditLine() const
+{
+    return editor->getLastEditLine();
+}
+
+int GUIController::lastEditColumn() const
+{
+    return editor->getLastEditColumn();
 }

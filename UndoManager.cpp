@@ -1,7 +1,7 @@
 #include "UndoManager.h"
 #include <string>
 
-UndoManager::UndoManager() : limit(100) {
+UndoManager::UndoManager() : limit(100), lastLine(0), lastCol(0) {
 }
 
 void UndoManager::record(const EditOperation& op) {
@@ -19,11 +19,42 @@ void UndoManager::record(const EditOperation& op) {
     // A new edit clears the previous redo history.
     redoHistory.clear();
 
-    while (history.getSize() >= limit) {
-        history.removeBottom();
+    history.push(op);
+    trimHistory();
+}
+
+// MERGE TYPING INTO THE PREVIOUS UNDO STEP
+bool UndoManager::mergeTyping(std::size_t line, std::size_t col,
+                              const std::string& text) {
+    if (text.empty() || text.find('\n') != std::string::npos) {
+        return false;
     }
 
-    history.push(op);
+    EditOperation top;
+
+    if (!history.peek(top)) {
+        return false;
+    }
+
+    auto isBlank = [](char c) { return c == ' ' || c == '\t'; };
+
+    if (top.type != OperationType::INSERT_TEXT ||
+        top.groupId != 0 ||
+        top.line != line ||
+        top.col + top.newText.length() != col ||
+        top.newText.empty() ||
+        isBlank(top.newText[top.newText.length() - 1])) {
+        return false;
+    }
+
+    // Replace the top entry with the extended one.
+    history.pop(top);
+    top.newText += text;
+    history.push(top);
+
+    // Typing is a new edit: redo history no longer applies.
+    redoHistory.clear();
+    return true;
 }
 
 // UNDO
@@ -40,6 +71,7 @@ bool UndoManager::undo(Document& doc) {
         return false;
     }
 
+    rememberPosition(op, true);
     redoHistory.push(op);
 
     std::size_t groupId = op.groupId;
@@ -56,9 +88,12 @@ bool UndoManager::undo(Document& doc) {
         history.pop(next);
 
         if (!applyInverse(next, doc)) {
+            // Put it back so history stays consistent with the document.
+            history.push(next);
             return false;
         }
 
+        rememberPosition(next, true);
         redoHistory.push(next);
     }
 
@@ -79,11 +114,9 @@ bool UndoManager::redo(Document& doc) {
         return false;
     }
 
-    while (history.getSize() >= limit) {
-        history.removeBottom();
-    }
-
+    rememberPosition(op, false);
     history.push(op);
+    trimHistory();
 
     std::size_t groupId = op.groupId;
 
@@ -99,14 +132,13 @@ bool UndoManager::redo(Document& doc) {
         redoHistory.pop(next);
 
         if (!applyForward(next, doc)) {
+            redoHistory.push(next);
             return false;
         }
 
-        while (history.getSize() >= limit) {
-            history.removeBottom();
-        }
-
+        rememberPosition(next, false);
         history.push(next);
+        trimHistory();
     }
 
     return true;
@@ -135,10 +167,7 @@ bool UndoManager::setLimit(std::size_t newLimit) {
     }
 
     limit = newLimit;
-
-    while (history.getSize() > limit) {
-        history.removeBottom();
-    }
+    trimHistory();
 
     return true;
 }
@@ -149,6 +178,90 @@ std::size_t UndoManager::getLimit() const {
 
 std::size_t UndoManager::getSize() const {
     return history.getSize();
+}
+
+std::size_t UndoManager::getLastLine() const {
+    return lastLine;
+}
+
+std::size_t UndoManager::getLastCol() const {
+    return lastCol;
+}
+
+// Remove the oldest WHOLE groups while over the limit.
+// Never splits a group and never removes the newest group.
+void UndoManager::trimHistory() {
+    while (history.getSize() > limit) {
+        EditOperation oldest;
+        EditOperation newest;
+
+        if (!history.peekBottom(oldest) || !history.peek(newest)) {
+            return;
+        }
+
+        std::size_t gid = oldest.groupId;
+
+        // Only one group left (it alone exceeds the limit): keep it.
+        if (gid != 0 && newest.groupId == gid) {
+            return;
+        }
+
+        history.removeBottom();
+
+        if (gid == 0) {
+            continue;
+        }
+
+        EditOperation next;
+
+        while (history.peekBottom(next) && next.groupId == gid) {
+            history.removeBottom();
+        }
+    }
+}
+
+// Where should the caret go after this step was undone / redone?
+void UndoManager::rememberPosition(const EditOperation& op, bool undoing) {
+    lastLine = op.line;
+    lastCol = op.col;
+
+    switch (op.type) {
+    case OperationType::INSERT_TEXT:
+        lastCol = undoing ? op.col : op.col + op.newText.length();
+        break;
+
+    case OperationType::DELETE_TEXT:
+        // A single deletion (Backspace) leaves the caret after the
+        // restored text; inside a group (cut) it goes to the start.
+        if (undoing && op.groupId == 0) {
+            lastCol = op.col + op.oldText.length();
+        }
+        break;
+
+    case OperationType::REPLACE:
+        lastCol = op.col + (undoing ? op.oldText.length()
+                                    : op.newText.length());
+        break;
+
+    case OperationType::SPLIT_LINE:
+        if (!undoing) {
+            lastLine = op.line + 1;
+            lastCol = 0;
+        }
+        break;
+
+    case OperationType::JOIN_LINE:
+        if (undoing) {
+            lastLine = op.line + 1;
+            lastCol = 0;
+        }
+        break;
+
+    case OperationType::INSERT_LINE:
+    case OperationType::DELETE_LINE:
+        lastCol = 0;
+        break;
+    }
 }
 
 // APPLY INVERSE OPERATION
